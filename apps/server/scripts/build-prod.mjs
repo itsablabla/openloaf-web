@@ -55,6 +55,11 @@ await build({
     "@ffmpeg-installer/ffmpeg",
     "@ffprobe-installer/ffprobe",
     "keytar",
+    // Web-mode: the desktop PPTX renderer package is unpublished on npm
+    // (registry returns "no versions"). Mark it external so esbuild leaves
+    // the dynamic import as-is; at runtime the require throws and callers
+    // fall back to a text-only PPTX summary. See WEB_MODE.md.
+    "node-pptx-png-v2",
   ],
   alias: {
     "@trpc/client": path.resolve(repoRoot, "node_modules", "@trpc", "client"),

@@ -556,7 +556,17 @@ async function ensurePptxCache(fullPath: string, scale = 1): Promise<PptxCacheSt
   if (inflight) return inflight;
 
   const task = (async (): Promise<PptxCacheState> => {
-    const { PptxImageRenderer } = await import("node-pptx-png-v2");
+    // See apps/server/src/ai/tools/office/pptxInspectEngine.ts for context.
+    let PptxImageRenderer: any;
+    try {
+      ({ PptxImageRenderer } = await import("node-pptx-png-v2"));
+    } catch (err) {
+      throw new Error(
+        `PPTX image rendering is unavailable in this build. ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
     const pptxBuf = await fs.readFile(fullPath);
     const targetWidth = Math.round(1280 * scale);
     const renderer = new PptxImageRenderer({ logLevel: "warn" });

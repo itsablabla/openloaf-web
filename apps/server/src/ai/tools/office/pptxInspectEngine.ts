@@ -747,7 +747,19 @@ export async function renderPptxSlides(
     assetRelPrefix: string
   },
 ): Promise<PptxRenderPage[]> {
-  const { PptxImageRenderer } = await import('node-pptx-png-v2')
+  // node-pptx-png-v2 is unpublished on npm as of 2026-08; the desktop build
+  // vendored a private tarball. Web-mode marks it external in esbuild and
+  // gracefully degrades to text-only PPTX summaries when it can't load.
+  let PptxImageRenderer: any
+  try {
+    ;({ PptxImageRenderer } = await import('node-pptx-png-v2'))
+  } catch (err) {
+    throw new Error(
+      `PPTX image rendering is unavailable in this build (node-pptx-png-v2 not resolvable). ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+  }
 
   const pptxBuf = await fs.readFile(absPath)
 

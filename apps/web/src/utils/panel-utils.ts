@@ -23,17 +23,21 @@ import { ExternalLink } from "lucide-react";
 // WebContentsView-backed browser. isElectronEnv() is evaluated at first
 // render, which is after the web-mode shim has installed itself in
 // Providers.tsx, so the check reflects the real runtime.
+//
+// The type gymnastic: both components accept a compatible superset of the
+// original ElectrronBrowserWindow props; we assert `as any` on the async
+// return so React.lazy's inferred type accepts either module.
 const LazyElectrronBrowserWindow = React.lazy(async () => {
   if (typeof window !== "undefined") {
-    // Dynamic import so bundlers don't pull the shim into the desktop bundle.
     const { isElectronEnv } = await import("@/utils/is-electron-env");
     if (!isElectronEnv()) {
       const mod = await import("@/components/browser/StreamedBrowserWindow");
-      return { default: mod.StreamedBrowserWindow as unknown as React.ComponentType<any> };
+      return { default: mod.StreamedBrowserWindow as any };
     }
   }
-  return import("@/components/browser/ElectrronBrowserWindow");
-});
+  const mod = await import("@/components/browser/ElectrronBrowserWindow");
+  return { default: mod.default as any };
+}) as unknown as React.LazyExoticComponent<React.ComponentType<any>>;
 const LazyToolResultPanel = React.lazy(() => import("@/components/tools/ToolResultPanel"));
 const LazySettingsPage = React.lazy(() => import("@/components/setting/SettingsPage"));
 const LazyProviderManagement = React.lazy(() =>

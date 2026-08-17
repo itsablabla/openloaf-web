@@ -37,7 +37,8 @@ ENV NODE_OPTIONS=--max-old-space-size=6144 \
     npm_config_fetch_retry_mintimeout=10000 \
     PNPM_HOME=/pnpm \
     CI=1 \
-    npm_config_store_dir=/pnpm/store
+    npm_config_store_dir=/pnpm/store \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
@@ -74,8 +75,11 @@ RUN for pkg in sharp better-sqlite3 node-pty @parcel/watcher esbuild @swc/core \
 
 # Playwright: download only the Chromium binary. Its runtime libs are apt-
 # installed in the final `runtime` stage, so we don't need --with-deps here.
+# PLAYWRIGHT_BROWSERS_PATH is set in this stage's ENV above so the browser
+# lands at /ms-playwright, ready for the runtime COPY --from=build.
 RUN pnpm exec playwright install chromium 2>&1 | tail -10 || \
     npx --yes playwright@1.58.0 install chromium 2>&1 | tail -10
+RUN ls -la /ms-playwright 2>&1 | head -6 && echo 'browsers ok'
 
 # ────────────────────────────────────────────────────────────────
 FROM deps AS build
