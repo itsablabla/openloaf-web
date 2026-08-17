@@ -116,7 +116,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     libpango-1.0-0 libcairo2 fonts-liberation fonts-noto-color-emoji \
     tini procps ca-certificates curl \
+    python3 python3-venv git openssh-client \
   && rm -rf /var/lib/apt/lists/*
+
+# ─── CLI agent runtimes — OpenLoaf spawns these as coding-agent backends.
+#     claudeCodeLanguageModel resolves `claude` via `which`;
+#     codexAppServerConnection spawns `codex app-server` from PATH.
+#     Separate RUN layers so each stays small for the flaky-pull-safe image.
+RUN npm install -g @anthropic-ai/claude-code && claude --version
+RUN npm install -g @openai/codex && codex --version
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/root/.openloaf/browsers \
     NODE_ENV=production \

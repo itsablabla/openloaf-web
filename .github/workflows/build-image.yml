@@ -134,6 +134,16 @@ jobs:
           echo "::error::static=$static_ok api=$api_ok — not both up within 8 min"
           exit 1
 
+      - name: Assert CLI runtimes present (claude, codex, python3, git)
+        run: |
+          docker exec openloaf bash -c '
+            set -e
+            echo "claude:  $(which claude)  $(claude --version 2>/dev/null || echo VERSION-CHECK-SKIPPED)"
+            echo "codex:   $(which codex)   $(codex --version 2>/dev/null || echo VERSION-CHECK-SKIPPED)"
+            echo "python3: $(which python3) $(python3 --version)"
+            echo "git:     $(which git)     $(git --version)"
+          '
+
       - name: Assert server runs from dist (not tsx fallback) and no crash loop
         run: |
           logs=$(docker logs openloaf 2>&1)
