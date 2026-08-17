@@ -30,10 +30,14 @@ RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
 # 16 parallel network requests (default 4 was hitting BuildKit's 10-min
 # layer inactivity limit), and disable side-effects cache side-effects.
 ENV NODE_OPTIONS=--max-old-space-size=6144 \
-    npm_config_network_concurrency=16 \
-    npm_config_child_concurrency=8 \
+    npm_config_network_concurrency=8 \
+    npm_config_child_concurrency=4 \
+    npm_config_fetch_retries=8 \
+    npm_config_fetch_retry_maxtimeout=120000 \
+    npm_config_fetch_retry_mintimeout=10000 \
     PNPM_HOME=/pnpm \
-    CI=1
+    CI=1 \
+    npm_config_store_dir=/pnpm/store
 
 WORKDIR /app
 
@@ -43,13 +47,16 @@ COPY . .
 
 # Full install for every workspace. --ignore-scripts skips postinstall hooks
 # that would rebuild native modules; we rebuild only what we need below.
-# Concurrency is set via env vars up in this stage's ENV block, which pnpm
-# reads at startup. --reporter=append-only keeps BuildKit's stdout flowing
-# so the layer doesn't hit the 10-min inactivity timeout.
-RUN pnpm install \
-      --no-frozen-lockfile \
-      --ignore-scripts \
-      --reporter=append-only
+# Concurrency is 8 (was 16 -> too many ECONNRESETs). Retry twice on failure
+# because the pnpm resolve talks to registry.npmjs.org 3000+ times and any
+# transient connection reset would otherwise abort the whole 10-min layer.
+RUN pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only \
+    || (echo '=== install failed, retry 1 at concurrency=4 ===' && \
+        sleep 15 && \
+        npm_config_network_concurrency=4 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
+    || (echo '=== install failed, retry 2 at concurrency=2 ===' && \
+        sleep 30 && \
+        npm_config_network_concurrency=2 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only)
 
 # Rebuild only the native modules the server + Playwright need on Linux.
 RUN for pkg in sharp better-sqlite3 node-pty @parcel/watcher esbuild @swc/core \
