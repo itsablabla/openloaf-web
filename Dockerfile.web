@@ -96,8 +96,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PORT=23333 \
     OPENLOAF_WEB_MODE=1
 
-RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
-
+# The runtime image only runs `node`; no pnpm needed. We copy the fully
+# installed node_modules + built artifacts straight over from `build`.
 WORKDIR /app
 COPY --from=build /app /app
 COPY --from=build /ms-playwright /ms-playwright
