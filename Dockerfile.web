@@ -47,16 +47,24 @@ COPY . .
 
 # Full install for every workspace. --ignore-scripts skips postinstall hooks
 # that would rebuild native modules; we rebuild only what we need below.
-# Concurrency is 8 (was 16 -> too many ECONNRESETs). Retry twice on failure
-# because the pnpm resolve talks to registry.npmjs.org 3000+ times and any
-# transient connection reset would otherwise abort the whole 10-min layer.
-RUN pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only \
-    || (echo '=== install failed, retry 1 at concurrency=4 ===' && \
-        sleep 15 && \
-        npm_config_network_concurrency=4 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
-    || (echo '=== install failed, retry 2 at concurrency=2 ===' && \
-        sleep 30 && \
-        npm_config_network_concurrency=2 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only)
+#
+# BuildKit cache mount on /pnpm/store: individual .tgz downloads survive
+# retries so we never redownload a package that already made it. Sharing=
+# locked serialises concurrent builds. Retries lower concurrency each time
+# because the Coolify build container has flaky connectivity to
+# registry.npmjs.org under load (repeated ECONNRESETs at concurrency=8).
+#
+# After install, copy the store into a stable location so the runtime stage
+# can COPY it out (BuildKit cache mounts don't persist past the RUN).
+RUN --mount=type=cache,target=/pnpm/store,sharing=locked,id=pnpm-store-v1 \
+    (pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only \
+     || (echo '=== install retry 1 (concurrency=4) ===' && sleep 15 && \
+         npm_config_network_concurrency=4 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
+     || (echo '=== install retry 2 (concurrency=2) ===' && sleep 30 && \
+         npm_config_network_concurrency=2 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
+     || (echo '=== install retry 3 (concurrency=1) ===' && sleep 60 && \
+         npm_config_network_concurrency=1 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only)) \
+    && echo '=== install ok; store size follows ===' && du -sh /pnpm/store 2>&1 | head -1
 
 # Rebuild only the native modules the server + Playwright need on Linux.
 RUN for pkg in sharp better-sqlite3 node-pty @parcel/watcher esbuild @swc/core \
