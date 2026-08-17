@@ -1,17 +1,9 @@
 # OpenLoaf web-mode production image
 # ────────────────────────────────────────────────────────────────
-# Runs the same monorepo the desktop app runs, minus Electron:
-#   - apps/server            (Hono + tRPC + Yjs + PTY + AI)  → :23333
-#   - apps/web               (Next.js static export)         → served by proxy
-#   - services/browser-stream (Playwright + WebSocket)       → :23334
-#
-# Coolify's IPv6 to ghcr.io resets connections mid-transfer on large
-# layers, so we ship the SMALLEST possible image and defer everything
-# heavy to first-boot (cached on the persistent volume):
-#   - Chromium               → first-boot (−450 MB layer)
-#   - node_modules           → first-boot (−600 MB layer)
-#   - Result: image compressed size ~200 MB (down from 2.3 GB)
-# One-time cold boot is ~5 min slower; subsequent restarts are instant.
+# Coolify's IPv6 to ghcr.io resets connections on large layers.
+# Strategy: keep the image reasonable (~500-700 MB compressed) by
+# aggressively pruning dev/build tooling and Electron before shipping.
+# Chromium is still fetched on first-boot to keep the base slim.
 
 FROM node:22-bookworm-slim AS deps
 
@@ -59,11 +51,40 @@ RUN pnpm --filter server run build:prod 2>&1 | tail -30 || \
     echo "server build failed; will fall back to tsx runtime"
 
 # ────────────────────────────────────────────────────────────────
-# Runtime image is INTENTIONALLY minimal: source + built artifacts +
-# package.json only. node_modules AND Chromium are both produced on
-# first boot and cached on the persistent volume. This keeps the
-# pushed/pulled image compressed size ~200 MB — the only way to
-# survive Coolify's flaky IPv6 to ghcr.io.
+# Aggressively prune everything not needed at runtime.
+RUN set -e; \
+    echo "=== BEFORE PRUNE ==="; du -sh node_modules; \
+    # Nuke Electron - only apps/desktop uses it
+    rm -rf node_modules/.pnpm/electron@*/node_modules/electron/dist 2>/dev/null || true; \
+    rm -rf node_modules/electron 2>/dev/null || true; \
+    rm -rf apps/desktop/node_modules 2>/dev/null || true; \
+    # Nuke dev-only tooling
+    for pat in 'typescript@*' 'eslint*' 'prettier@*' '@types+*' \
+               'vitest@*' '@vitest*' 'jest*' '@jest*' 'mocha@*' \
+               '@swc-core*' '@swc+core*' 'webpack@*' 'webpack-cli*' 'webpack-dev*' '@webpack*' \
+               'rollup@*' '@rollup+*' 'esbuild@*' 'esbuild-*' 'terser@*' 'terser-*' \
+               '@parcel+*' 'parcel@*' 'storybook@*' '@storybook*' \
+               'playwright@*' 'chromium-bidi*' 'playwright-*'; do \
+      find node_modules/.pnpm -maxdepth 1 -type d -name "$pat" -exec rm -rf {} + 2>/dev/null || true; \
+    done; \
+    # Playwright-core is needed by services/browser-stream, but not its bundled browsers
+    find node_modules/.pnpm -type d -name 'browsers' -path '*playwright-core*' -exec rm -rf {} + 2>/dev/null || true; \
+    # Big binary blobs we don't need at runtime
+    find node_modules -type d \( -name 'test' -o -name 'tests' -o -name '__tests__' \
+        -o -name 'examples' -o -name 'example' -o -name 'docs' -o -name 'doc' \
+        -o -name 'benchmark' -o -name 'benchmarks' -o -name '.github' \
+      \) -prune -exec rm -rf {} + 2>/dev/null || true; \
+    find node_modules -type f \( -name '*.md' -o -name '*.markdown' -o -name '*.map' \
+        -o -name 'CHANGELOG*' -o -name 'LICENSE*' -o -name '*.d.ts.map' \
+        -o -name '*.tsbuildinfo' -o -name '.eslintrc*' -o -name '.prettierrc*' \
+      \) -delete 2>/dev/null || true; \
+    # Sharp includes prebuilt binaries for every arch; keep only linux-x64
+    find node_modules/.pnpm -type d -path '*@img+sharp*' \
+        ! -path '*sharp-linux-x64*' ! -path '*sharp-libvips-linux-x64*' \
+        -mindepth 3 -maxdepth 4 -exec rm -rf {} + 2>/dev/null || true; \
+    echo "=== AFTER PRUNE ==="; du -sh node_modules
+
+# ────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -71,35 +92,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     libpango-1.0-0 libcairo2 fonts-liberation fonts-noto-color-emoji \
     tini procps ca-certificates curl \
-    build-essential python3 pkg-config git \
   && rm -rf /var/lib/apt/lists/*
-
-RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/root/.openloaf/browsers \
     NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=23333 \
     OPENLOAF_WEB_MODE=1 \
-    OPENLOAF_INSTALL_ON_BOOT=1 \
-    OPENLOAF_INSTALL_CHROMIUM_ON_BOOT=1 \
-    CI=1 \
-    npm_config_network_concurrency=4 \
-    npm_config_fetch_retries=8 \
-    npm_config_fetch_retry_maxtimeout=120000
+    OPENLOAF_INSTALL_CHROMIUM_ON_BOOT=1
 
 WORKDIR /app
 
-# ─── Small layers only: NO node_modules baked in.
 COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/.npmrc ./
-COPY --from=build /app/apps/desktop/package.json /app/apps/desktop/package.json
-COPY --from=build /app/apps/web/package.json /app/apps/web/package.json
-COPY --from=build /app/apps/server/package.json /app/apps/server/package.json
 COPY --from=build /app/apps/web/out /app/apps/web/out
+COPY --from=build /app/apps/web/package.json /app/apps/web/package.json
 COPY --from=build /app/apps/server/dist /app/apps/server/dist
+COPY --from=build /app/apps/server/package.json /app/apps/server/package.json
 COPY --from=build /app/apps/server/scripts /app/apps/server/scripts
 COPY --from=build /app/packages /app/packages
 COPY --from=build /app/services /app/services
+COPY --from=build /app/node_modules /app/node_modules
 
 VOLUME ["/root/.openloaf"]
 EXPOSE 8080
