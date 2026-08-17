@@ -557,8 +557,12 @@ async function ensurePptxCache(fullPath: string, scale = 1): Promise<PptxCacheSt
 
   const task = (async (): Promise<PptxCacheState> => {
     // See apps/server/src/ai/tools/office/pptxInspectEngine.ts for context.
+    // The @ts-expect-error handles the fact that the package is unresolvable
+    // during web-mode builds — the dynamic import is wrapped in try/catch so
+    // the codepath degrades gracefully at runtime.
     let PptxImageRenderer: any;
     try {
+      // @ts-expect-error — node-pptx-png-v2 has no published version; see WEB_MODE.md
       ({ PptxImageRenderer } = await import("node-pptx-png-v2"));
     } catch (err) {
       throw new Error(

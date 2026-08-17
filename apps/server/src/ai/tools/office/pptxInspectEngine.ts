@@ -752,6 +752,7 @@ export async function renderPptxSlides(
   // gracefully degrades to text-only PPTX summaries when it can't load.
   let PptxImageRenderer: any
   try {
+    // @ts-expect-error — node-pptx-png-v2 has no published version; see WEB_MODE.md
     ;({ PptxImageRenderer } = await import('node-pptx-png-v2'))
   } catch (err) {
     throw new Error(
