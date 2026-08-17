@@ -73,8 +73,10 @@ export function installWebModeShim(): void {
     },
 
     // --- Speech ----------------------------------------------------------
+    // SpeechRecognition is a WebkitBrowser API; TS's default DOM lib doesn't
+    // include it in every tsconfig, so we treat it as `any`.
     startSpeechRecognition: async (opts: Record<string, unknown>) => {
-      const SR: typeof SpeechRecognition | undefined =
+      const SR: any =
         (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
       if (!SR) return { supported: false };
       const rec = new SR();
@@ -86,7 +88,7 @@ export function installWebModeShim(): void {
       return { supported: true };
     },
     stopSpeechRecognition: async () => {
-      const rec = (window as any).__openloafSR as SpeechRecognition | undefined;
+      const rec: any = (window as any).__openloafSR;
       try { rec?.stop(); } catch {}
       delete (window as any).__openloafSR;
       return { ok: true };
