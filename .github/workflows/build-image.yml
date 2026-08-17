@@ -99,31 +99,44 @@ jobs:
             -e PORT=8080 \
             ghcr.io/${{ github.repository_owner }}/openloaf-web:${{ needs.build.outputs.sha_tag }}
 
-      - name: Wait for HTTP 200 on / (max 8 min — first boot downloads Chromium)
+      - name: Wait for static UI AND API server (max 8 min)
         run: |
+          static_ok=""; api_ok=""
           for i in $(seq 1 96); do
             sleep 5
             state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' openloaf 2>/dev/null || echo gone)
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8080/ || true)
-            echo "[$((i*5))s] container=$state http=$code"
-            if [ "$code" = "200" ]; then
-              echo "UP after $((i*5))s"; exit 0
+            s=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8080/ || true)
+            a=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8080/api/health || true)
+            echo "[$((i*5))s] container=$state static=$s api=$a"
+            [ "$s" = "200" ] && static_ok=1
+            # ANY response except 502 (proxy: server down) / 000 proves the
+            # Hono server process is alive and listening.
+            case "$a" in 200|204|301|302|401|404) api_ok=1;; esac
+            if [ -n "$static_ok" ] && [ -n "$api_ok" ]; then
+              echo "UP after $((i*5))s (static=$s api=$a)"; exit 0
             fi
             case "$state" in
               exited*|dead*|gone)
                 echo "::error::container died: $state"; exit 1;;
             esac
           done
-          echo "::error::container never served HTTP 200 within 8 min"
+          echo "::error::static=$static_ok api=$api_ok — not both up within 8 min"
           exit 1
 
-      - name: Check API + static routes
+      - name: Assert server runs from dist (not tsx fallback) and no crash loop
         run: |
-          set -x
-          curl -s -o /dev/null -w 'GET /            → %{http_code}\n' http://127.0.0.1:8080/
-          curl -s -o /dev/null -w 'GET /api/health  → %{http_code}\n' http://127.0.0.1:8080/api/health || true
-          # Static asset sanity: index.html should contain the app shell
-          curl -s http://127.0.0.1:8080/ | head -c 400
+          logs=$(docker logs openloaf 2>&1)
+          if echo "$logs" | grep -q 'server/dist/index.js'; then
+            echo "OK: server started from esbuild dist"
+          else
+            echo '::error::server did not start from apps/server/dist/index.js'
+            exit 1
+          fi
+          crashes=$(echo "$logs" | grep -c '\[server\] exited' || true)
+          if [ "$crashes" -gt 1 ]; then
+            echo "::error::server crashed $crashes times"
+            exit 1
+          fi
 
       - name: Container logs (always)
         if: always()
