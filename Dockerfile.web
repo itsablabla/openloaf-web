@@ -26,9 +26,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
+# Ballast: 6 GB heap for pnpm (the resolver has a big graph),
+# 16 parallel network requests (default 4 was hitting BuildKit's 10-min
+# layer inactivity limit), and disable side-effects cache side-effects.
 ENV NODE_OPTIONS=--max-old-space-size=6144 \
-    npm_config_network_concurrency=4 \
-    PNPM_HOME=/pnpm
+    npm_config_network_concurrency=16 \
+    PNPM_HOME=/pnpm \
+    CI=1
 
 WORKDIR /app
 
@@ -38,7 +42,15 @@ COPY . .
 
 # Full install for every workspace. --ignore-scripts skips postinstall hooks
 # that would rebuild native modules; we rebuild only what we need below.
-RUN pnpm install --no-frozen-lockfile --ignore-scripts
+# Route through the store's tarball fast path (--prefer-offline OK once cache
+# warms) and use --config.network-concurrency to override any repo pnpm-file.
+RUN pnpm install \
+      --no-frozen-lockfile \
+      --ignore-scripts \
+      --config.network-concurrency=16 \
+      --config.child-concurrency=8 \
+      --config.side-effects-cache=false \
+      --reporter=append-only
 
 # Rebuild only the native modules the server + Playwright need on Linux.
 RUN for pkg in sharp better-sqlite3 node-pty @parcel/watcher esbuild @swc/core \
