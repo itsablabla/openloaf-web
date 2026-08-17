@@ -13,13 +13,17 @@
  * Only install when running outside Electron.
  */
 
-type Openish = Record<string, (...args: unknown[]) => unknown>;
+// The shim's shape mirrors window.openloafElectron loosely — the renderer
+// already treats every call as optional (`api?.foo?.()`) so we don't need to
+// match the desktop preload signatures exactly. Using `any` keeps the callsite
+// types happy without pulling in the whole electron.d.ts.
+type Shim = Record<string, any>;
 
 export function installWebModeShim(): void {
   if (typeof window === "undefined") return;
   if ((window as any).openloafElectron) return; // real preload wins
 
-  const shim: Openish = {
+  const shim: Shim = {
     // --- URLs / navigation ------------------------------------------------
     openExternal: async (url: string) => {
       try { window.open(url, "_blank", "noopener,noreferrer"); return true; }
