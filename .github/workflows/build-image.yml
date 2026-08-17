@@ -126,10 +126,10 @@ jobs:
       - name: Assert server runs from dist (not tsx fallback) and no crash loop
         run: |
           logs=$(docker logs openloaf 2>&1)
-          if echo "$logs" | grep -q 'server/dist/index.js'; then
-            echo "OK: server started from esbuild dist"
+          if echo "$logs" | grep -qE 'server/dist/(index\.(mjs|js)|server\.mjs)'; then
+            echo "OK: server started from built dist"
           else
-            echo '::error::server did not start from apps/server/dist/index.js'
+            echo '::error::server did not start from a built dist entry'
             exit 1
           fi
           crashes=$(echo "$logs" | grep -c '\[server\] exited' || true)

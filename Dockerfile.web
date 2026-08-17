@@ -47,10 +47,15 @@ RUN pnpm --filter @openloaf/widget-sdk build
 RUN pnpm --filter @openloaf/db db:generate 2>&1 | tail -5 || true
 RUN pnpm --filter web build 2>&1 | tail -20
 # NO silent fallback: if the server doesn't build, the image must not ship.
-RUN pnpm --filter server run build:prod 2>&1 | tail -120 && \
-    test -f apps/server/dist/index.js || \
-    (echo '=== build:prod failed or dist/index.js missing; trying tsdown build ===' && \
-     pnpm --filter server run build 2>&1 | tail -120 && test -f apps/server/dist/index.js)
+# tsdown (the 'build' script) emits dist/index.mjs; build:prod (esbuild)
+# emits dist/server.mjs. Either is fine — the entrypoint auto-detects.
+RUN pnpm --filter server run build 2>&1 | tail -60; \
+    if [ ! -f apps/server/dist/index.mjs ] && [ ! -f apps/server/dist/index.js ]; then \
+      echo '=== tsdown produced no entry; trying build:prod (esbuild) ==='; \
+      pnpm --filter server run build:prod 2>&1 | tail -120; \
+    fi; \
+    ls -la apps/server/dist/ | head -20; \
+    test -f apps/server/dist/index.mjs -o -f apps/server/dist/index.js -o -f apps/server/dist/server.mjs
 
 # ────────────────────────────────────────────────────────────────
 # Aggressively prune everything not needed at runtime.

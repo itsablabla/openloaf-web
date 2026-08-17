@@ -68,13 +68,25 @@ function supervise(name, cmd, args, env = {}) {
 }
 
 // ────────────────────────────────────────────────────────────────
-// 1) Hono server (apps/server)
+// 1) Hono server (apps/server) — auto-detect the built entry.
+//    tsdown emits dist/index.mjs; the esbuild script emits dist/server.mjs.
+const SERVER_ENTRY_CANDIDATES = [
+  'apps/server/dist/index.mjs',
+  'apps/server/dist/index.js',
+  'apps/server/dist/server.mjs',
+];
+const serverEntry = SERVER_ENTRY_CANDIDATES.find(p => fs.existsSync(path.join(ROOT, p)));
+if (!serverEntry) {
+  console.error('[entrypoint] FATAL: no server entry found. Looked for:', SERVER_ENTRY_CANDIDATES.join(', '));
+  console.error('[entrypoint] dist contents:');
+  try {
+    for (const f of fs.readdirSync(path.join(ROOT, 'apps/server/dist'))) console.error('  ', f);
+  } catch (e) { console.error('  (no dist dir)'); }
+}
 supervise(
   'server',
   'node',
-  fs.existsSync(path.join(ROOT, 'apps/server/dist/index.js'))
-    ? ['apps/server/dist/index.js']
-    : ['-r', 'tsx/cjs', 'apps/server/src/index.ts'],
+  serverEntry ? [serverEntry] : ['-e', 'setInterval(()=>console.error("[server] no entry; idle"),60000)'],
   { PORT: String(SERVER_PORT), HOST: '0.0.0.0' },
 );
 
