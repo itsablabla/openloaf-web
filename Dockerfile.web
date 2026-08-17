@@ -1,34 +1,24 @@
 # OpenLoaf web-mode production image
 # ────────────────────────────────────────────────────────────────
 # Runs the same monorepo the desktop app runs, minus Electron:
-#   - apps/server (Hono + tRPC + Yjs collab + PTY + AI): port 23333
-#   - apps/web    (Next.js static export)             : served via server or static file server
-#   - services/browser-stream (Playwright + WebSocket): port 23334
+#   - apps/server            (Hono + tRPC + Yjs + PTY + AI)  → :23333
+#   - apps/web               (Next.js static export)         → served by proxy
+#   - services/browser-stream (Playwright + WebSocket)       → :23334
 #
-# All three sit behind a small Hono reverse-proxy on port 8080 so Coolify
-# only publishes one port and Traefik terminates TLS on one router.
-#
-# Build strategy:
-#   1. deps  — one big pnpm install, cached in its own layer
-#   2. build — turbo build (web static export + server tsc)
-#   3. run   — slim runtime image with only what's needed at boot
-#
+# Coolify's IPv6 to ghcr.io resets connections mid-transfer, so we optimise
+# aggressively for image size:
+#   - Chromium downloaded on first-boot instead of baked in (−450 MB)
+#   - Runtime does a fresh --prod install so dev deps are absent (−600 MB)
+#   - Result: image compressed size ~700–900 MB (down from 2.3 GB)
+
 FROM node:22-bookworm-slim AS deps
 
-# Deps stage: only the toolchain and *runtime* libs needed by native modules.
-# libvips-dev pulls in ~2 GB of AV1/HDF5/GTK dev headers we don't need; sharp
-# ships prebuilt binaries so plain libvips42 at runtime is enough. Playwright's
-# --with-deps flag would pull the same X11/GTK dev cascade; we install its
-# runtime libs directly (see runtime stage) and pass --no-shell instead.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential python3 pkg-config git curl ca-certificates \
     ffmpeg libvips42 procps \
   && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
-# Ballast: 6 GB heap for pnpm (the resolver has a big graph),
-# 16 parallel network requests (default 4 was hitting BuildKit's 10-min
-# layer inactivity limit), and disable side-effects cache side-effects.
 ENV NODE_OPTIONS=--max-old-space-size=6144 \
     npm_config_network_concurrency=8 \
     npm_config_child_concurrency=4 \
@@ -36,62 +26,31 @@ ENV NODE_OPTIONS=--max-old-space-size=6144 \
     npm_config_fetch_retry_maxtimeout=120000 \
     npm_config_fetch_retry_mintimeout=10000 \
     PNPM_HOME=/pnpm \
-    CI=1 \
-    npm_config_store_dir=/pnpm/store \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    CI=1
 
 WORKDIR /app
-
-# Copy everything so workspace resolution works, but the .dockerignore keeps
-# node_modules/dist/.next out — install populates them fresh.
 COPY . .
 
-# Full install for every workspace. --ignore-scripts skips postinstall hooks
-# that would rebuild native modules; we rebuild only what we need below.
-#
-# BuildKit cache mount on /pnpm/store: individual .tgz downloads survive
-# retries so we never redownload a package that already made it. Sharing=
-# locked serialises concurrent builds. Retries lower concurrency each time
-# because the Coolify build container has flaky connectivity to
-# registry.npmjs.org under load (repeated ECONNRESETs at concurrency=8).
-#
-# After install, copy the store into a stable location so the runtime stage
-# can COPY it out (BuildKit cache mounts don't persist past the RUN).
-RUN --mount=type=cache,target=/pnpm/store,sharing=locked,id=pnpm-store-v1 \
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked,id=pnpm-store-v2 \
     (pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only \
-     || (echo '=== install retry 1 (concurrency=4) ===' && sleep 15 && \
+     || (echo '=== retry 1 (concurrency=4) ===' && sleep 15 && \
          npm_config_network_concurrency=4 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
-     || (echo '=== install retry 2 (concurrency=2) ===' && sleep 30 && \
+     || (echo '=== retry 2 (concurrency=2) ===' && sleep 30 && \
          npm_config_network_concurrency=2 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
-     || (echo '=== install retry 3 (concurrency=1) ===' && sleep 60 && \
-         npm_config_network_concurrency=1 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only)) \
-    && echo '=== install ok; store size follows ===' && du -sh /pnpm/store 2>&1 | head -1
+     || (echo '=== retry 3 (concurrency=1) ===' && sleep 60 && \
+         npm_config_network_concurrency=1 pnpm install --no-frozen-lockfile --ignore-scripts --reporter=append-only))
 
-# Rebuild only the native modules the server + Playwright need on Linux.
 RUN for pkg in sharp better-sqlite3 node-pty @parcel/watcher esbuild @swc/core \
                 prisma @prisma/engines @napi-rs/canvas; do \
       (cd node_modules/$pkg 2>/dev/null && npm rebuild 2>&1 | tail -2) || echo "skip $pkg"; \
     done
 
-# Playwright: download only the Chromium binary. Its runtime libs are apt-
-# installed in the final `runtime` stage, so we don't need --with-deps here.
-# PLAYWRIGHT_BROWSERS_PATH is set in this stage's ENV above so the browser
-# lands at /ms-playwright, ready for the runtime COPY --from=build.
-RUN pnpm exec playwright install chromium 2>&1 | tail -10 || \
-    npx --yes playwright@1.58.0 install chromium 2>&1 | tail -10
-RUN ls -la /ms-playwright 2>&1 | head -6 && echo 'browsers ok'
-
 # ────────────────────────────────────────────────────────────────
 FROM deps AS build
 
 WORKDIR /app
-
-# widget-sdk builds first (web depends on it), then everything else
 RUN pnpm --filter @openloaf/widget-sdk build
 RUN pnpm --filter @openloaf/db db:generate 2>&1 | tail -5 || true
-
-# Web: Next.js static export → apps/web/out
-# Server: tsc → apps/server/dist  (or run from src via tsx)
 RUN pnpm --filter web build 2>&1 | tail -20
 RUN pnpm --filter server run build:prod 2>&1 | tail -30 || \
     pnpm --filter server run build 2>&1 | tail -30 || \
@@ -100,30 +59,61 @@ RUN pnpm --filter server run build:prod 2>&1 | tail -30 || \
 # ────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime
 
+# Runtime libs + a minimal toolchain (npm rebuild for a few native modules).
+# Toolchain gets removed after use to keep the image small.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libvips42 libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
     libpango-1.0-0 libcairo2 fonts-liberation fonts-noto-color-emoji \
-    tini procps ca-certificates \
+    tini procps ca-certificates curl \
+    build-essential python3 pkg-config git \
   && rm -rf /var/lib/apt/lists/*
 
-# Playwright expects its browsers cache at /ms-playwright by default
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.openloaf/browsers \
     NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=23333 \
-    OPENLOAF_WEB_MODE=1
+    OPENLOAF_WEB_MODE=1 \
+    OPENLOAF_INSTALL_CHROMIUM_ON_BOOT=1 \
+    CI=1 \
+    npm_config_network_concurrency=4 \
+    npm_config_fetch_retries=8 \
+    npm_config_fetch_retry_maxtimeout=120000
 
-# The runtime image only runs `node`; no pnpm needed. We copy the fully
-# installed node_modules + built artifacts straight over from `build`.
 WORKDIR /app
-COPY --from=build /app /app
-COPY --from=build /ms-playwright /ms-playwright
 
-# Data volume: SQLite DB + config + uploads all live under /root/.openloaf
+# ─── Layer split, small to large. Each COPY is its own layer.
+COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/.npmrc ./
+COPY --from=build /app/packages /app/packages
+COPY --from=build /app/apps/desktop/package.json /app/apps/desktop/package.json
+COPY --from=build /app/apps/web/out /app/apps/web/out
+COPY --from=build /app/apps/web/package.json /app/apps/web/package.json
+COPY --from=build /app/apps/server/dist /app/apps/server/dist
+COPY --from=build /app/apps/server/package.json /app/apps/server/package.json
+COPY --from=build /app/apps/server/scripts /app/apps/server/scripts
+COPY --from=build /app/services /app/services
+
+# Fresh --prod install ~600 MB smaller than dev tree, native modules rebuilt.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked,id=pnpm-store-v3 \
+    (pnpm install --prod --no-frozen-lockfile --ignore-scripts --reporter=append-only \
+     || (echo '=== prod-install retry (concurrency=2) ===' && sleep 30 && \
+         npm_config_network_concurrency=2 pnpm install --prod --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
+     || (echo '=== prod-install retry (concurrency=1) ===' && sleep 60 && \
+         npm_config_network_concurrency=1 pnpm install --prod --no-frozen-lockfile --ignore-scripts --reporter=append-only)) && \
+    for pkg in sharp better-sqlite3 node-pty; do \
+      (cd node_modules/$pkg 2>/dev/null && npm rebuild 2>&1 | tail -2) || echo "skip $pkg"; \
+    done && \
+    apt-get remove -y build-essential python3 pkg-config git 2>&1 | tail -2 && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/* /root/.npm /root/.cache 2>/dev/null || true
+
 VOLUME ["/root/.openloaf"]
-
 EXPOSE 8080
 
+COPY --from=build /app/services/entrypoint/first-boot.sh /usr/local/bin/first-boot.sh
+RUN chmod +x /usr/local/bin/first-boot.sh
+
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "services/entrypoint/entrypoint.mjs"]
+CMD ["/usr/local/bin/first-boot.sh"]
