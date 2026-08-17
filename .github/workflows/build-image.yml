@@ -45,11 +45,22 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Docker Hub is the registry Coolify pulls from — its CDN is
+      # IPv4-only, which sidesteps the server's broken IPv6 path to
+      # ghcr.io entirely.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/openloaf-web
+          images: |
+            ghcr.io/${{ github.repository_owner }}/openloaf-web
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openloaf-web
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/web-mode' }}
             type=sha,prefix=,format=short
