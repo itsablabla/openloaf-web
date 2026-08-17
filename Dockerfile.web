@@ -5,11 +5,13 @@
 #   - apps/web               (Next.js static export)         → served by proxy
 #   - services/browser-stream (Playwright + WebSocket)       → :23334
 #
-# Coolify's IPv6 to ghcr.io resets connections mid-transfer, so we optimise
-# aggressively for image size:
-#   - Chromium downloaded on first-boot instead of baked in (−450 MB)
-#   - Runtime does a fresh --prod install so dev deps are absent (−600 MB)
-#   - Result: image compressed size ~700–900 MB (down from 2.3 GB)
+# Coolify's IPv6 to ghcr.io resets connections mid-transfer on large
+# layers, so we ship the SMALLEST possible image and defer everything
+# heavy to first-boot (cached on the persistent volume):
+#   - Chromium               → first-boot (−450 MB layer)
+#   - node_modules           → first-boot (−600 MB layer)
+#   - Result: image compressed size ~200 MB (down from 2.3 GB)
+# One-time cold boot is ~5 min slower; subsequent restarts are instant.
 
 FROM node:22-bookworm-slim AS deps
 
@@ -57,10 +59,13 @@ RUN pnpm --filter server run build:prod 2>&1 | tail -30 || \
     echo "server build failed; will fall back to tsx runtime"
 
 # ────────────────────────────────────────────────────────────────
+# Runtime image is INTENTIONALLY minimal: source + built artifacts +
+# package.json only. node_modules AND Chromium are both produced on
+# first boot and cached on the persistent volume. This keeps the
+# pushed/pulled image compressed size ~200 MB — the only way to
+# survive Coolify's flaky IPv6 to ghcr.io.
 FROM node:22-bookworm-slim AS runtime
 
-# Runtime libs + a minimal toolchain (npm rebuild for a few native modules).
-# Toolchain gets removed after use to keep the image small.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libvips42 libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
     libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
@@ -76,6 +81,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/root/.openloaf/browsers \
     HOST=0.0.0.0 \
     PORT=23333 \
     OPENLOAF_WEB_MODE=1 \
+    OPENLOAF_INSTALL_ON_BOOT=1 \
     OPENLOAF_INSTALL_CHROMIUM_ON_BOOT=1 \
     CI=1 \
     npm_config_network_concurrency=4 \
@@ -84,30 +90,16 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/root/.openloaf/browsers \
 
 WORKDIR /app
 
-# ─── Layer split, small to large. Each COPY is its own layer.
+# ─── Small layers only: NO node_modules baked in.
 COPY --from=build /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/.npmrc ./
-COPY --from=build /app/packages /app/packages
 COPY --from=build /app/apps/desktop/package.json /app/apps/desktop/package.json
-COPY --from=build /app/apps/web/out /app/apps/web/out
 COPY --from=build /app/apps/web/package.json /app/apps/web/package.json
-COPY --from=build /app/apps/server/dist /app/apps/server/dist
 COPY --from=build /app/apps/server/package.json /app/apps/server/package.json
+COPY --from=build /app/apps/web/out /app/apps/web/out
+COPY --from=build /app/apps/server/dist /app/apps/server/dist
 COPY --from=build /app/apps/server/scripts /app/apps/server/scripts
+COPY --from=build /app/packages /app/packages
 COPY --from=build /app/services /app/services
-
-# Fresh --prod install ~600 MB smaller than dev tree, native modules rebuilt.
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked,id=pnpm-store-v3 \
-    (pnpm install --prod --no-frozen-lockfile --ignore-scripts --reporter=append-only \
-     || (echo '=== prod-install retry (concurrency=2) ===' && sleep 30 && \
-         npm_config_network_concurrency=2 pnpm install --prod --no-frozen-lockfile --ignore-scripts --reporter=append-only) \
-     || (echo '=== prod-install retry (concurrency=1) ===' && sleep 60 && \
-         npm_config_network_concurrency=1 pnpm install --prod --no-frozen-lockfile --ignore-scripts --reporter=append-only)) && \
-    for pkg in sharp better-sqlite3 node-pty; do \
-      (cd node_modules/$pkg 2>/dev/null && npm rebuild 2>&1 | tail -2) || echo "skip $pkg"; \
-    done && \
-    apt-get remove -y build-essential python3 pkg-config git 2>&1 | tail -2 && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/* /root/.npm /root/.cache 2>/dev/null || true
 
 VOLUME ["/root/.openloaf"]
 EXPOSE 8080
