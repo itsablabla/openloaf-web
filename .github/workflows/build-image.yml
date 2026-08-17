@@ -24,6 +24,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      sha_tag: ${{ steps.shatag.outputs.tag }}
     steps:
       - name: Free up runner disk (image is large)
         run: |
@@ -52,6 +54,10 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/web-mode' }}
             type=sha,prefix=,format=short
 
+      - name: Export short-sha tag
+        id: shatag
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -64,8 +70,76 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
 
+  # ──────────────────────────────────────────────────────────────
+  # Run the EXACT image the same way Coolify will: named volume on
+  # /root/.openloaf, port 8080. Fail loudly with full container logs
+  # if it doesn't come up. Coolify never sees an image that failed here.
+  smoke-test:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull ghcr.io/${{ github.repository_owner }}/openloaf-web:${{ needs.build.outputs.sha_tag }}
+
+      - name: Start container (Coolify-equivalent config)
+        run: |
+          docker volume create openloaf-data
+          docker run -d --name openloaf \
+            -v openloaf-data:/root/.openloaf \
+            -p 8080:8080 \
+            -e PORT=8080 \
+            ghcr.io/${{ github.repository_owner }}/openloaf-web:${{ needs.build.outputs.sha_tag }}
+
+      - name: Wait for HTTP 200 on / (max 8 min — first boot downloads Chromium)
+        run: |
+          for i in $(seq 1 96); do
+            sleep 5
+            state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' openloaf 2>/dev/null || echo gone)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8080/ || true)
+            echo "[$((i*5))s] container=$state http=$code"
+            if [ "$code" = "200" ]; then
+              echo "UP after $((i*5))s"; exit 0
+            fi
+            case "$state" in
+              exited*|dead*|gone)
+                echo "::error::container died: $state"; exit 1;;
+            esac
+          done
+          echo "::error::container never served HTTP 200 within 8 min"
+          exit 1
+
+      - name: Check API + static routes
+        run: |
+          set -x
+          curl -s -o /dev/null -w 'GET /            → %{http_code}\n' http://127.0.0.1:8080/
+          curl -s -o /dev/null -w 'GET /api/health  → %{http_code}\n' http://127.0.0.1:8080/api/health || true
+          # Static asset sanity: index.html should contain the app shell
+          curl -s http://127.0.0.1:8080/ | head -c 400
+
+      - name: Container logs (always)
+        if: always()
+        run: |
+          echo "=== docker logs (last 300 lines) ==="
+          docker logs --tail 300 openloaf 2>&1 || true
+          echo "=== docker inspect state ==="
+          docker inspect -f '{{json .State}}' openloaf 2>/dev/null || true
+
+  # ──────────────────────────────────────────────────────────────
+  deploy:
+    needs: [build, smoke-test]
+    if: github.ref == 'refs/heads/web-mode'
+    runs-on: ubuntu-latest
+    steps:
       - name: Notify Coolify to redeploy
-        if: success() && github.event_name != 'workflow_dispatch'
         env:
           COOLIFY_URL: ${{ vars.COOLIFY_URL }}
           COOLIFY_APP_UUID: ${{ vars.COOLIFY_APP_UUID }}
