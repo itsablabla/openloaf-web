@@ -28,6 +28,13 @@ import FilePreviewDialog from "@/components/file/FilePreviewDialog";
 import { TooltipProvider } from "@openloaf/ui/tooltip";
 import LocalAuthGate from "@/components/local-auth/LocalAuthGate";
 import { isElectronEnv } from "@/utils/is-electron-env";
+import { installWebModeShim } from "@/utils/web-mode-shim";
+
+// Install the web-mode shim as early as possible so any early-mount code that
+// touches window.openloafElectron sees safe fallbacks. No-op inside Electron.
+if (typeof window !== "undefined") {
+  installWebModeShim();
+}
 import { initOverlayDetector } from "@/lib/overlay-detector";
 import { initModelRegistry } from "@/lib/model-registry";
 import { resolveSaasBaseUrl } from "@/lib/saas-auth";

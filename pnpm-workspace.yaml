@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - services
 
 catalog:
   '@prisma/client': ^7.3.0

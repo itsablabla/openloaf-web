@@ -34,6 +34,16 @@ docs
 chat-history
 
 # Electron（源码保留以满足 workspace 解析，但不会启动 GUI）
+# For web-mode: exclude Electron changelogs, native macOS helpers and Electron-only build artifacts.
+# The apps/desktop TypeScript still gets included so workspace resolution works.
+apps/desktop/changelogs
+apps/desktop/native
+apps/desktop/.webpack
 
 # Tests cache
 **/coverage
+
+# Local scratch (from author's laptop) — don't ship into the image
+**/*.pplx.md
+test-results
+playwright-report

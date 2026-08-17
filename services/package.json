@@ -1,0 +1,13 @@
+{
+  "name": "@openloaf/services",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenLoaf web-mode runtime services: entrypoint supervisor + browser-stream",
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "playwright-core": "^1.58.0",
+    "serve-handler": "^6.1.6",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,95 @@
+# OpenLoaf web-mode production image
+# ────────────────────────────────────────────────────────────────
+# Runs the same monorepo the desktop app runs, minus Electron:
+#   - apps/server (Hono + tRPC + Yjs collab + PTY + AI): port 23333
+#   - apps/web    (Next.js static export)             : served via server or static file server
+#   - services/browser-stream (Playwright + WebSocket): port 23334
+#
+# All three sit behind a small Hono reverse-proxy on port 8080 so Coolify
+# only publishes one port and Traefik terminates TLS on one router.
+#
+# Build strategy:
+#   1. deps  — one big pnpm install, cached in its own layer
+#   2. build — turbo build (web static export + server tsc)
+#   3. run   — slim runtime image with only what's needed at boot
+#
+FROM node:22-bookworm-slim AS deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential python3 pkg-config git curl ca-certificates \
+    libvips-dev ffmpeg libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+    libpango-1.0-0 libcairo2 procps xvfb \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
+ENV NODE_OPTIONS=--max-old-space-size=6144 \
+    npm_config_network_concurrency=4 \
+    PNPM_HOME=/pnpm
+
+WORKDIR /app
+
+# Copy everything so workspace resolution works, but the .dockerignore keeps
+# node_modules/dist/.next out — install populates them fresh.
+COPY . .
+
+# Full install for every workspace. --ignore-scripts skips postinstall hooks
+# that would rebuild native modules; we rebuild only what we need below.
+RUN pnpm install --no-frozen-lockfile --ignore-scripts
+
+# Rebuild only the native modules the server + Playwright need on Linux.
+RUN for pkg in sharp better-sqlite3 node-pty @parcel/watcher esbuild @swc/core \
+                prisma @prisma/engines @napi-rs/canvas; do \
+      (cd node_modules/$pkg 2>/dev/null && npm rebuild 2>&1 | tail -2) || echo "skip $pkg"; \
+    done
+
+# Playwright browsers (Chromium only — that's all the streaming service needs)
+RUN pnpm exec playwright install --with-deps chromium 2>&1 | tail -20 || \
+    npx --yes playwright@1.58.0 install --with-deps chromium 2>&1 | tail -20
+
+# ────────────────────────────────────────────────────────────────
+FROM deps AS build
+
+WORKDIR /app
+
+# widget-sdk builds first (web depends on it), then everything else
+RUN pnpm --filter @openloaf/widget-sdk build
+RUN pnpm --filter @openloaf/db db:generate 2>&1 | tail -5 || true
+
+# Web: Next.js static export → apps/web/out
+# Server: tsc → apps/server/dist  (or run from src via tsx)
+RUN pnpm --filter web build 2>&1 | tail -20
+RUN pnpm --filter server run build:prod 2>&1 | tail -30 || \
+    pnpm --filter server run build 2>&1 | tail -30 || \
+    echo "server build failed; will fall back to tsx runtime"
+
+# ────────────────────────────────────────────────────────────────
+FROM node:22-bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libvips42 libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+    libpango-1.0-0 libcairo2 fonts-liberation fonts-noto-color-emoji \
+    tini procps ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Playwright expects its browsers cache at /ms-playwright by default
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=23333 \
+    OPENLOAF_WEB_MODE=1
+
+RUN corepack enable && corepack prepare pnpm@10.34.5 --activate
+
+WORKDIR /app
+COPY --from=build /app /app
+COPY --from=build /ms-playwright /ms-playwright
+
+# Data volume: SQLite DB + config + uploads all live under /root/.openloaf
+VOLUME ["/root/.openloaf"]
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "services/entrypoint/entrypoint.mjs"]

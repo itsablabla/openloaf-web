@@ -19,7 +19,21 @@ import { ExternalLink } from "lucide-react";
 
 // Lazy-load all panel components to reduce initial bundle size.
 // LeftDock wraps ComponentMap entries in <React.Suspense>.
-const LazyElectrronBrowserWindow = React.lazy(() => import("@/components/browser/ElectrronBrowserWindow"));
+// In web-mode we substitute a streamed-Chromium canvas for the Electron
+// WebContentsView-backed browser. isElectronEnv() is evaluated at first
+// render, which is after the web-mode shim has installed itself in
+// Providers.tsx, so the check reflects the real runtime.
+const LazyElectrronBrowserWindow = React.lazy(async () => {
+  if (typeof window !== "undefined") {
+    // Dynamic import so bundlers don't pull the shim into the desktop bundle.
+    const { isElectronEnv } = await import("@/utils/is-electron-env");
+    if (!isElectronEnv()) {
+      const mod = await import("@/components/browser/StreamedBrowserWindow");
+      return { default: mod.StreamedBrowserWindow as unknown as React.ComponentType<any> };
+    }
+  }
+  return import("@/components/browser/ElectrronBrowserWindow");
+});
 const LazyToolResultPanel = React.lazy(() => import("@/components/tools/ToolResultPanel"));
 const LazySettingsPage = React.lazy(() => import("@/components/setting/SettingsPage"));
 const LazyProviderManagement = React.lazy(() =>
