@@ -16,10 +16,14 @@
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { createProxyServer } from 'http-proxy';
+import httpProxy from 'http-proxy';
 import serveHandler from 'serve-handler';
 import path from 'node:path';
 import fs from 'node:fs';
+
+// http-proxy is a CJS module — its ESM interop exposes createProxyServer
+// as a property of the default export.
+const createProxyServer = httpProxy.createProxyServer.bind(httpProxy);
 
 const ROOT = path.resolve(process.cwd());
 const WEB_OUT = path.join(ROOT, 'apps/web/out');
