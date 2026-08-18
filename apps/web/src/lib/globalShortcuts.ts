@@ -26,16 +26,16 @@ export type GlobalShortcutDefinition = {
 };
 
 export const GLOBAL_SHORTCUTS: GlobalShortcutDefinition[] = [
-  { id: "sidebar.toggle", label: "切换侧边栏", keys: "Mod+Shift+B" },
-  { id: "chat.toggle", label: "切换对话面板", keys: "Mod+B" },
-  { id: "search.toggle", label: "搜索", keys: "Mod+F" },
-  { id: "open.calendar", label: "打开日历", keys: "Mod+L" },
-  { id: "open.workbench", label: "打开工作台", keys: "Mod+T" },
-  { id: "open.ai-assistant", label: "打开 AI秘书", keys: "Mod+I" },
-  { id: "open.canvas-list", label: "打开画布列表", keys: "Mod+K" },
+  { id: "sidebar.toggle", label: "Toggle sidebar", keys: "Mod+Shift+B" },
+  { id: "chat.toggle", label: "Toggle chat panel", keys: "Mod+B" },
+  { id: "search.toggle", label: "Search", keys: "Mod+F" },
+  { id: "open.calendar", label: "Open calendar", keys: "Mod+L" },
+  { id: "open.workbench", label: "Open workbench", keys: "Mod+T" },
+  { id: "open.ai-assistant", label: "Open AI assistant", keys: "Mod+I" },
+  { id: "open.canvas-list", label: "Open canvas list", keys: "Mod+K" },
   {
     id: "settings.open",
-    label: "打开设置",
+    label: "Open settings",
     keys: "Cmd+,",
     note: "Electron + macOS only",
   },
@@ -45,7 +45,7 @@ export const GLOBAL_SHORTCUTS: GlobalShortcutDefinition[] = [
     keys: "F5 / Mod+R",
     note: "Production only",
   },
-  { id: "feedback.open", label: "意见反馈", keys: "Mod+Shift+U" },
+  { id: "feedback.open", label: "Feedback", keys: "Mod+Shift+U" },
 ];
 
 type GlobalOverlayState = {

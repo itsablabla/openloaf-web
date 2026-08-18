@@ -84,7 +84,10 @@ function getInitialLanguage(): string {
 // Initialize react-i18next
 i18n.use(initReactI18next).init({
   lng: getInitialLanguage(),
-  fallbackLng: 'zh-CN',
+  // Fall back to English (not Chinese) when a key is missing — web-mode
+  // serves an international audience and mixed-language UI is worse than
+  // a missing translation falling back to English.
+  fallbackLng: 'en-US',
   debug: false,
   ns: ['common', 'nav', 'ai', 'settings', 'project', 'tasks', 'board', 'calendar', 'desktop', 'connections'],
   defaultNS: 'common',

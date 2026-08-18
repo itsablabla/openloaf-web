@@ -849,7 +849,7 @@ export const fsRouter = t.router({
       // scope 解析失败（项目已删除等）等同于找不到文件，显式抛错而不是返回空内容。
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: `fs.readFile: 无法解析文件作用域 (uri=${input.uri})`,
+        message: `fs.readFile: could not resolve file scope (uri=${input.uri})`,
       });
     }
     const { fullPath } = resolvedScope;
@@ -867,7 +867,7 @@ export const fsRouter = t.router({
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `fs.readFile: 文件不存在 (uri=${input.uri})`,
+          message: `fs.readFile: file not found (uri=${input.uri})`,
         });
       }
       throw error;
@@ -880,7 +880,7 @@ export const fsRouter = t.router({
     if (!resolvedScope) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: `fs.readBinary: 无法解析文件作用域 (uri=${input.uri})`,
+        message: `fs.readBinary: could not resolve file scope (uri=${input.uri})`,
       });
     }
     const { fullPath } = resolvedScope;
@@ -893,7 +893,7 @@ export const fsRouter = t.router({
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: `fs.readBinary: 文件不存在 (uri=${input.uri})`,
+          message: `fs.readBinary: file not found (uri=${input.uri})`,
         });
       }
       throw error;
@@ -1215,7 +1215,7 @@ export const fsRouter = t.router({
     if (!resolvedScope) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: `fs.pptxSlideMeta: 无法解析文件 (uri=${input.uri})`,
+        message: `fs.pptxSlideMeta: could not resolve file (uri=${input.uri})`,
       });
     }
     const state = await ensurePptxCache(resolvedScope.fullPath);
@@ -1232,7 +1232,7 @@ export const fsRouter = t.router({
     if (!resolvedScope) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: `fs.pptxSlideImage: 无法解析文件 (uri=${input.uri})`,
+        message: `fs.pptxSlideImage: could not resolve file (uri=${input.uri})`,
       });
     }
     const scale = input.scale ?? 1;
@@ -1240,7 +1240,7 @@ export const fsRouter = t.router({
     if (input.slide < 1 || input.slide > state.total) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `fs.pptxSlideImage: slide ${input.slide} 超出范围 (1-${state.total})`,
+        message: `fs.pptxSlideImage: slide ${input.slide} out of range (1-${state.total})`,
       });
     }
     const cacheFile = path.join(state.cacheDir, `slide-${input.slide}-s${scale}.png`);
@@ -1248,7 +1248,7 @@ export const fsRouter = t.router({
     if (!buf) {
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
-        message: `fs.pptxSlideImage: 缓存文件缺失 ${cacheFile}`,
+        message: `fs.pptxSlideImage: cache file missing ${cacheFile}`,
       });
     }
     const meta = await sharp(buf).metadata().catch(() => null);
