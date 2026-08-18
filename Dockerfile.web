@@ -125,6 +125,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #     Separate RUN layers so each stays small for the flaky-pull-safe image.
 RUN npm install -g @anthropic-ai/claude-code && claude --version
 RUN npm install -g @openai/codex && codex --version
+RUN npm install -g opencode-ai && opencode --version
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/root/.openloaf/browsers \
     NODE_ENV=production \

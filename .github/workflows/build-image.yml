@@ -140,6 +140,7 @@ jobs:
             set -e
             echo "claude:  $(which claude)  $(claude --version 2>/dev/null || echo VERSION-CHECK-SKIPPED)"
             echo "codex:   $(which codex)   $(codex --version 2>/dev/null || echo VERSION-CHECK-SKIPPED)"
+            echo "opencode: $(which opencode) $(opencode --version 2>/dev/null || echo VERSION-CHECK-SKIPPED)"
             echo "python3: $(which python3) $(python3 --version)"
             echo "git:     $(which git)     $(git --version)"
           '
