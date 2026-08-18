@@ -134,6 +134,20 @@ jobs:
           echo "::error::static=$static_ok api=$api_ok — not both up within 8 min"
           exit 1
 
+      - name: Assert /ai/chat reaches the server (not the static handler)
+        run: |
+          # POST with an empty body: the Hono server responds with a structured
+          # error (400/401/422/500) while the static handler would return
+          # 404/405 HTML. Any non-404/405 code proves the proxy routes /ai/*.
+          code=$(curl -s -o /tmp/aichat.out -w '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' -d '{}' \
+            http://127.0.0.1:8080/ai/chat || true)
+          echo "POST /ai/chat → $code"
+          head -c 200 /tmp/aichat.out; echo
+          case "$code" in
+            404|405|000) echo '::error::/ai/chat is not reaching the Hono server'; exit 1;;
+          esac
+
       - name: Assert CLI runtimes present (claude, codex, python3, git)
         run: |
           docker exec openloaf bash -c '

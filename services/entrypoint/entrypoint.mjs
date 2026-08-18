@@ -115,6 +115,7 @@ const server = createServer((req, res) => {
   } else if (
     url.startsWith('/api') ||
     url.startsWith('/trpc') ||
+    url.startsWith('/ai') ||   // AI chat streaming: /ai/chat, /ai/chat/abort, /ai/chat/async
     url.startsWith('/ws') ||
     url.startsWith('/collab') ||
     url.startsWith('/ipc') ||
